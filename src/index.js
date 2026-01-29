@@ -50,34 +50,57 @@ function auth(request, env) {
 }
 
 async function callback(request, env) {
-  const url = new URL(request.url);
-  const shop = url.searchParams.get("shop");
-  const code = url.searchParams.get("code");
+  try {
+    const url = new URL(request.url);
+    const shop = url.searchParams.get("shop");
+    const code = url.searchParams.get("code");
 
-  if (!shop || !code) {
-    return new Response("Invalid callback", { status: 400 });
+    if (!shop || !code) {
+      return new Response("Invalid callback", { status: 400 });
+    }
+
+    const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        client_id: env.SHOPIFY_CLIENT_ID,
+        client_secret: env.SHOPIFY_CLIENT_SECRET,
+        code
+      }).toString()
+    });
+
+    const text = await res.text();
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return new Response(
+        `OAuth token response not JSON:\n${text}`,
+        { status: 500 }
+      );
+    }
+
+    if (!data.access_token) {
+      return new Response(
+        `OAuth failed:\n${JSON.stringify(data)}`,
+        { status: 500 }
+      );
+    }
+
+    await env.SHOPIFY_ACCESS_TOKEN.put(shop, data.access_token);
+
+    return new Response("App installed successfully");
+  } catch (err) {
+    return new Response(
+      `OAuth callback error:\n${err.message}`,
+      { status: 500 }
+    );
   }
-
-  const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: env.SHOPIFY_CLIENT_ID,
-      client_secret: env.SHOPIFY_CLIENT_SECRET,
-      code
-    })
-  });
-
-  const { access_token } = await res.json();
-
-  if (!access_token) {
-    return new Response("OAuth failed", { status: 500 });
-  }
-
-  await env.TOKENS.put(shop, access_token);
-
-  return new Response("App installed");
 }
+
 
 /* ================= ORDER DECISION ================= */
 
@@ -86,48 +109,31 @@ async function decision(request, env) {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  const { shop, order_id, decision } = await request.json();
+  const { shop, draftOrderId, decision } = await request.json();
 
-  if (!shop || !order_id || !decision) {
+  if (!shop || !draftOrderId || !decision) {
     return new Response("Missing data", { status: 400 });
   }
 
-  const token = await env.TOKENS.get(shop);
+  const token = await env.SHOPIFY_ACCESS_TOKEN.get(shop);
   if (!token) return new Response("Unauthorized", { status: 401 });
 
-  if (decision === "reject") {
-    return cancelOrder(shop, order_id, token, env);
+  if (decision === "approve") {
+    return completeDraftOrder(shop, draftOrderId, token, env);
   }
 
-  if (decision === "approve") {
-    return approveOrder(shop, order_id, token, env);
+  if (decision === "reject") {
+    return deleteDraftOrder(shop, draftOrderId, token, env);
   }
 
   return new Response("Invalid decision", { status: 400 });
 }
 
-/* ================= SHOPIFY ACTIONS ================= */
+/* ================= DRAFT ORDER ACTIONS ================= */
 
-async function cancelOrder(shop, orderId, token, env) {
+async function completeDraftOrder(shop, draftOrderId, token, env) {
   const res = await fetch(
-    `https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/orders/${orderId}/cancel.json`,
-    {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json"
-      }
-    }
-  );
-
-  return res.ok
-    ? new Response("Order rejected")
-    : new Response("Cancel failed", { status: 500 });
-}
-
-async function approveOrder(shop, orderId, token, env) {
-  const res = await fetch(
-    `https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/orders/${orderId}/transactions.json`,
+    `https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`,
     {
       method: "POST",
       headers: {
@@ -135,12 +141,80 @@ async function approveOrder(shop, orderId, token, env) {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        transaction: { kind: "capture" }
+        query: `
+          mutation ($id: ID!) {
+            draftOrderComplete(id: $id) {
+              draftOrder {
+                id
+                name
+                completedAt
+                order {
+                  id
+                  name
+                }
+              }
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `,
+        variables: {
+          id: draftOrderId
+        }
       })
     }
   );
 
-  return res.ok
-    ? new Response("Order approved")
-    : new Response("Approval failed", { status: 500 });
+  const data = await res.json();
+
+  if (data.errors || data.data.draftOrderComplete.userErrors.length) {
+    return new Response(
+      JSON.stringify(data),
+      { status: 500 }
+    );
+  }
+
+  return new Response("Draft order approved and completed");
+}
+
+async function deleteDraftOrder(shop, draftOrderId, token, env) {
+  const res = await fetch(
+    `https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        query: `
+          mutation ($id: ID!) {
+            draftOrderDelete(id: $id) {
+              deletedId
+              userErrors {
+                field
+                message
+              }
+            }
+          }
+        `,
+        variables: {
+          id: draftOrderId
+        }
+      })
+    }
+  );
+
+  const data = await res.json();
+
+  if (data.errors || data.data.draftOrderDelete.userErrors.length) {
+    return new Response(
+      JSON.stringify(data),
+      { status: 500 }
+    );
+  }
+
+  return new Response("Draft order rejected and deleted");
 }
