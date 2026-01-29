@@ -9,7 +9,13 @@
 	"compatibility_date": "2026-01-28",
 	"observability": {
 		"enabled": true
-	}
+	},
+	"kv_namespaces": [
+		{
+			"binding": "SHOPIFY_ACCESS_TOKEN",
+			"id": "0b50cc415b0a46079864a74486e4bded"
+		}
+	],
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
