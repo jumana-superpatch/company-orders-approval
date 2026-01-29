@@ -16,6 +16,10 @@
 			"id": "0b50cc415b0a46079864a74486e4bded"
 		}
 	],
+	"vars": {
+		"SHOPIFY_API_VERSION": "2024-10",
+		"APP_URL": "https://company-orders-approval.cloudflare-superpatch.workers.dev"
+	}
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
