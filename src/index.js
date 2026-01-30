@@ -8,21 +8,20 @@ export default {
   }
 };
 
-const html = (body) => new Response(body, { headers: { "Content-Type": "text/html" } });
+const html = (msg, script = "") => new Response(`
+  <body style="font-family:sans-serif;text-align:center;padding-top:50px;">
+    <h2>${msg}</h2>
+    ${script || `<script>alert("${msg}"); window.close();</script>`}
+  </body>`, { headers: { "Content-Type": "text/html" } });
 
 /* ======== OAUTH ======== */
 function auth(params, env) {
   const shop = params.get("shop");
-  if (!shop) return new Response("Missing shop", { status: 400 });
-
-  const redirect = `https://${shop}/admin/oauth/authorize?client_id=${env.SHOPIFY_CLIENT_ID}&scope=read_orders,write_orders,write_draft_orders&redirect_uri=${encodeURIComponent(env.APP_URL + "/auth/callback")}`;
-  return Response.redirect(redirect, 302);
+  return Response.redirect(`https://${shop}/admin/oauth/authorize?client_id=${env.SHOPIFY_CLIENT_ID}&scope=read_orders,write_orders,write_draft_orders&redirect_uri=${encodeURIComponent(env.APP_URL + "/auth/callback")}`, 302);
 }
 
 function callback(params, env) {
   const shop = params.get("shop"), code = params.get("code");
-  if (!shop || !code) return new Response("Invalid callback", { status: 400 });
-
   return fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -36,12 +35,26 @@ function callback(params, env) {
 
 /* ======== ORDER DECISION ======== */
 function decision(params, env) {
-  const shop = params.get("shop"), id = params.get("draftOrderId"), action = params.get("decision");
+  const shop = params.get("shop"), id = params.get("draftOrderId"), action = params.get("decision"), confirmed = params.get("confirm");
   if (!shop || !id || !action) return new Response("Missing params", { status: 400 });
 
   return env.SHOPIFY_ACCESS_TOKEN.get(shop).then(token => {
     if (!token) return new Response("Unauthorized", { status: 401 });
-    return action === "approve" ? completeOrder(shop, id, token, env) : rejectOrder(shop, id, token, env);
+    if (action === "reject") return rejectOrder(shop, id, token, env);
+    
+    // Approval logic with override check
+    return gql(shop, token, env, `query($id: ID!) { draftOrder(id: $id) { tags } }`, { id })
+      .then(res => {
+        const tags = res.data?.draftOrder?.tags || [];
+        if (tags.includes("rejected") && !confirmed) {
+          return html("This order was previously rejected.", `
+            <p>Do you want to override and approve it anyway?</p>
+            <button onclick="location.href='${env.APP_URL}/order/decision?shop=${shop}&draftOrderId=${encodeURIComponent(id)}&decision=approve&confirm=true'">Yes, Approve</button>
+            <button onclick="window.close()">No, Cancel</button>
+          `);
+        }
+        return completeOrder(shop, id, token, env, tags.filter(t => t !== "rejected"));
+      });
   });
 }
 
@@ -54,27 +67,23 @@ function gql(shop, token, env, query, variables) {
   }).then(res => res.json());
 }
 
-async function completeOrder(shop, id, token, env) {
-  return gql(shop, token, env, `mutation($id: ID!) { draftOrderComplete(id: $id) { draftOrder { completedAt order { name } } userErrors { message } } }`, { id })
+function completeOrder(shop, id, token, env, newTags) {
+  // Update tags first to remove 'rejected', then complete
+  return gql(shop, token, env, `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { id } } }`, { id, input: { tags: newTags } })
+    .then(() => gql(shop, token, env, `mutation($id: ID!) { draftOrderComplete(id: $id) { draftOrder { order { name } } userErrors { message } } }`, { id }))
     .then(res => {
-      const result = res.data?.draftOrderComplete;
-      return result?.draftOrder?.completedAt 
-        ? html(`<h2>Approved</h2><p>Order ${result.draftOrder.order.name} created.</p>`)
-        : html(`<h2>Error</h2><p>${result?.userErrors?.[0]?.message || "Failed"}</p>`);
+      const err = res.data?.draftOrderComplete?.userErrors?.[0]?.message;
+      return err ? html(`Error: ${err}`) : html(`Order ${res.data.draftOrderComplete.draftOrder.order.name} Approved!`);
     })
     .catch(err => new Response(err.message, { status: 500 }));
 }
 
-async function rejectOrder(shop, id, token, env) {
+function rejectOrder(shop, id, token, env) {
   return gql(shop, token, env, `query($id: ID!) { draftOrder(id: $id) { status } }`, { id })
     .then(res => {
-      if (res.data?.draftOrder?.status === "COMPLETED") {
-        return html(`<h2>Cannot Reject</h2><p>This order has already been approved and completed.</p>`);
-      }
+      if (res.data?.draftOrder?.status === "COMPLETED") return html("Cannot Reject: Order already approved.");
       return gql(shop, token, env, `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { userErrors { message } } }`, { id, input: { tags: ["rejected"] } })
-        .then(res => res.data?.draftOrderUpdate?.userErrors?.length 
-          ? new Response("Update failed", { status: 400 }) 
-          : html(`<h2>Rejected</h2><p>Order tagged as rejected.</p>`));
+        .then(res => res.data?.draftOrderUpdate?.userErrors?.length ? html("Update failed") : html("Order Rejected Successfully"));
     })
     .catch(err => new Response(err.message, { status: 500 }));
 }
