@@ -70,7 +70,7 @@ function decision(request, env) {
 }
 
 /* ======== DRAFT ORDER ACTIONS ======== */
-function completeDraftOrder(shop, draftOrderId, token, env) {
+async function completeDraftOrder(shop, draftOrderId, token, env) {
   const body = {
     query: `
       mutation($id: ID!) {
@@ -101,27 +101,47 @@ function completeDraftOrder(shop, draftOrderId, token, env) {
 function rejectDraftOrder(shop, draftOrderId, token, env) {
   const body = {
     query: `
-      mutation($input: DraftOrderInput!) {
-        draftOrderUpdate(input: $input) {
-          draftOrder { id tags }
-          userErrors { field message }
+      mutation ($id: ID!, $input: DraftOrderInput!) {
+        draftOrderUpdate(id: $id, input: $input) {
+          draftOrder {
+            id
+            tags
+          }
+          userErrors {
+            field
+            message
+          }
         }
       }
     `,
-    variables: { input: { id: draftOrderId, tags: ["rejected"] } }
+    variables: {
+      id: draftOrderId,
+      input: {
+        tags: ["rejected"]
+      }
+    }
   };
 
-  return fetch(`https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`, {
-    method: "POST",
-    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  })
+  return fetch(
+    `https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  )
     .then(res => res.json())
     .then(data => {
       if (data.errors || data.data.draftOrderUpdate.userErrors.length) {
         return new Response(JSON.stringify(data), { status: 500 });
       }
-      return new Response("Draft order rejected: 'rejected' tag added");
+      return new Response("Draft order rejected: tag added");
     })
-    .catch(err => new Response(`Error rejecting order: ${err.message}`, { status: 500 }));
+    .catch(err =>
+      new Response(`Error rejecting draft order: ${err.message}`, { status: 500 })
+    );
 }
+
