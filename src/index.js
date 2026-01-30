@@ -8,11 +8,32 @@ export default {
   }
 };
 
-const html = (msg, script = "") => new Response(`
-  <body style="font-family:sans-serif;text-align:center;padding-top:50px;">
-    <h2>${msg}</h2>
-    ${script || `<script>alert("${msg}"); window.close();</script>`}
-  </body>`, { headers: { "Content-Type": "text/html" } });
+/* Modern UI Wrapper */
+const html = (title, content, isAutoClose = true) => new Response(`
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f8; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+        h2 { color: #202223; margin-top: 0; font-size: 1.25rem; }
+        p { color: #6d7175; line-height: 1.5; margin-bottom: 1.5rem; }
+        .btn { border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: 600; font-size: 14px; text-decoration: none; display: inline-block; transition: background 0.2s; }
+        .btn-primary { background: #008060; color: white; margin-right: 10px; }
+        .btn-primary:hover { background: #006e52; }
+        .btn-secondary { background: #f6f6f7; color: #202223; border: 1px solid #bdc1c4; }
+        .btn-secondary:hover { background: #edeeef; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h2>${title}</h2>
+        <div>${content}</div>
+      </div>
+      ${isAutoClose ? `<script>alert("${title}"); window.close();</script>` : ""}
+    </body>
+  </html>`, { headers: { "Content-Type": "text/html" } });
 
 /* ======== OAUTH ======== */
 function auth(params, env) {
@@ -42,16 +63,16 @@ function decision(params, env) {
     if (!token) return new Response("Unauthorized", { status: 401 });
     if (action === "reject") return rejectOrder(shop, id, token, env);
     
-    // Approval logic with override check
     return gql(shop, token, env, `query($id: ID!) { draftOrder(id: $id) { tags } }`, { id })
       .then(res => {
         const tags = res.data?.draftOrder?.tags || [];
         if (tags.includes("rejected") && !confirmed) {
-          return html("This order was previously rejected.", `
-            <p>Do you want to override and approve it anyway?</p>
-            <button onclick="location.href='${env.APP_URL}/order/decision?shop=${shop}&draftOrderId=${encodeURIComponent(id)}&decision=approve&confirm=true'">Yes, Approve</button>
-            <button onclick="window.close()">No, Cancel</button>
-          `);
+          const approveUrl = `${env.APP_URL}/order/decision?shop=${shop}&draftOrderId=${encodeURIComponent(id)}&decision=approve&confirm=true`;
+          return html("Previously Rejected", `
+            <p>This draft order is tagged as <b>rejected</b>. Do you want to override this and approve it anyway?</p>
+            <a href="${approveUrl}" class="btn btn-primary">Yes, Approve</a>
+            <button onclick="window.close()" class="btn btn-secondary">No, Cancel</button>
+          `, false);
         }
         return completeOrder(shop, id, token, env, tags.filter(t => t !== "rejected"));
       });
@@ -68,12 +89,11 @@ function gql(shop, token, env, query, variables) {
 }
 
 function completeOrder(shop, id, token, env, newTags) {
-  // Update tags first to remove 'rejected', then complete
   return gql(shop, token, env, `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { id } } }`, { id, input: { tags: newTags } })
     .then(() => gql(shop, token, env, `mutation($id: ID!) { draftOrderComplete(id: $id) { draftOrder { order { name } } userErrors { message } } }`, { id }))
     .then(res => {
       const err = res.data?.draftOrderComplete?.userErrors?.[0]?.message;
-      return err ? html(`Error: ${err}`) : html(`Order ${res.data.draftOrderComplete.draftOrder.order.name} Approved!`);
+      return err ? html("Error", `<p>${err}</p>`) : html("Success", `<p>Order ${res.data.draftOrderComplete.draftOrder.order.name} has been created.</p>`);
     })
     .catch(err => new Response(err.message, { status: 500 }));
 }
@@ -81,9 +101,9 @@ function completeOrder(shop, id, token, env, newTags) {
 function rejectOrder(shop, id, token, env) {
   return gql(shop, token, env, `query($id: ID!) { draftOrder(id: $id) { status } }`, { id })
     .then(res => {
-      if (res.data?.draftOrder?.status === "COMPLETED") return html("Cannot Reject: Order already approved.");
+      if (res.data?.draftOrder?.status === "COMPLETED") return html("Action Restricted", "<p>This order is already approved and cannot be rejected.</p>");
       return gql(shop, token, env, `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { userErrors { message } } }`, { id, input: { tags: ["rejected"] } })
-        .then(res => res.data?.draftOrderUpdate?.userErrors?.length ? html("Update failed") : html("Order Rejected Successfully"));
+        .then(res => res.data?.draftOrderUpdate?.userErrors?.length ? html("Error", "<p>Update failed.</p>") : html("Rejected", "<p>The order has been tagged as rejected.</p>"));
     })
     .catch(err => new Response(err.message, { status: 500 }));
 }
