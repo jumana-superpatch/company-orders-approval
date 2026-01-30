@@ -41,7 +41,7 @@ function auth(params, env) {
   return Response.redirect(`https://${shop}/admin/oauth/authorize?client_id=${env.SHOPIFY_CLIENT_ID}&scope=read_orders,write_orders,write_draft_orders&redirect_uri=${encodeURIComponent(env.APP_URL + "/auth/callback")}`, 302);
 }
 
-function callback(params, env) {
+async function callback(params, env) {
   const shop = params.get("shop"), code = params.get("code");
   return fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
@@ -80,7 +80,7 @@ function decision(params, env) {
 }
 
 /* ======== HELPERS & ACTIONS ======== */
-function gql(shop, token, env, query, variables) {
+async function gql(shop, token, env, query, variables) {
   return fetch(`https://${shop}/admin/api/${env.SHOPIFY_API_VERSION}/graphql.json`, {
     method: "POST",
     headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
@@ -88,7 +88,7 @@ function gql(shop, token, env, query, variables) {
   }).then(res => res.json());
 }
 
-function completeOrder(shop, id, token, env, newTags) {
+async function completeOrder(shop, id, token, env, newTags) {
   return gql(shop, token, env, `mutation($id: ID!, $input: DraftOrderInput!) { draftOrderUpdate(id: $id, input: $input) { draftOrder { id } } }`, { id, input: { tags: newTags } })
     .then(() => gql(shop, token, env, `mutation($id: ID!) { draftOrderComplete(id: $id) { draftOrder { order { name } } userErrors { message } } }`, { id }))
     .then(res => {
@@ -98,7 +98,7 @@ function completeOrder(shop, id, token, env, newTags) {
     .catch(err => new Response(err.message, { status: 500 }));
 }
 
-function rejectOrder(shop, id, token, env) {
+async function rejectOrder(shop, id, token, env) {
   return gql(shop, token, env, `query($id: ID!) { draftOrder(id: $id) { status } }`, { id })
     .then(res => {
       if (res.data?.draftOrder?.status === "COMPLETED") return html("Action Restricted", "<p>This order is already approved and cannot be rejected.</p>");
