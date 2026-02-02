@@ -17,10 +17,9 @@
 		}
 	],
 	"vars": {
-		"SHOPIFY_API_VERSION": "2024-10",
+		"SHOPIFY_API_VERSION": "2026-01",
 		"APP_URL": "https://company-orders-approval.cloudflare-superpatch.workers.dev",
-		"SHOPIFY_CLIENT_ID": "931bdb56e5e15339b244d0cf04538d50",
-		"SHOPIFY_CLIENT_SECRET": "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",
+		
 	}
 	/**
 	 * Smart Placement
