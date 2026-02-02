@@ -107,4 +107,3 @@ async function rejectOrder(shop, id, token, env) {
     })
     .catch(err => new Response(err.message, { status: 500 }));
 }
-
